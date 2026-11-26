@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RVD Markdown Viewer</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+<style>
+  :root {
+    --bg:#f6f7f9; --panel:#fff; --text:#1f2328; --muted:#656d76; --border:#d8dee4;
+    --accent:#2563eb; --accent-text:#fff; --code-bg:#f3f4f6; --quote:#d0d7de;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#0d1117; --panel:#161b22; --text:#e6edf3; --muted:#8b949e; --border:#30363d;
+      --accent:#3b82f6; --accent-text:#fff; --code-bg:#1f2630; --quote:#3d444d;
+    }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif; height:100vh; display:flex; flex-direction:column; }
+  header { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:10px 16px; background:var(--panel); border-bottom:1px solid var(--border); }
+  h1 { font-size:16px; margin:0 12px 0 0; }
+  .spacer { flex:1; }
+  button, .btn { font:inherit; font-size:13px; padding:6px 12px; border:1px solid var(--border); background:var(--panel); color:var(--text); border-radius:6px; cursor:pointer; }
+  button:hover, .btn:hover { border-color:var(--accent); }
+  .primary { background:var(--accent); color:var(--accent-text); border-color:var(--accent); }
+  .seg { display:inline-flex; }
+  .seg button { border-radius:0; margin-left:-1px; }
+  .seg button:first-child { border-radius:6px 0 0 6px; margin-left:0; }
+  .seg button:last-child { border-radius:0 6px 6px 0; }
+  .seg button.on { background:var(--accent); color:var(--accent-text); border-color:var(--accent); }
+  main { flex:1; display:grid; grid-template-columns:var(--split,50%) 12px minmax(0,1fr); gap:0; padding:12px 16px; min-height:0; }
+  main.edit { grid-template-columns:1fr; } main.edit #divider, main.view #divider { display:none; } main.edit #previewPane { display:none; }
+  main.view { grid-template-columns:1fr; } main.view #editorPane { display:none; }
+  .pane { background:var(--panel); border:1px solid var(--border); border-radius:8px; overflow:hidden; display:flex; flex-direction:column; min-height:0; position:relative; }
+  .pane > .label { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); padding:8px 14px; border-bottom:1px solid var(--border); }
+  textarea { flex:1; width:100%; border:0; outline:0; resize:none; padding:14px; background:transparent; color:var(--text); font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  #preview { flex:1; overflow:auto; padding:20px 28px; }
+  #drop { position:absolute; inset:0; display:none; align-items:center; justify-content:center; background:color-mix(in srgb,var(--accent) 15%,transparent); border:2px dashed var(--accent); border-radius:8px; font-weight:600; pointer-events:none; }
+  .dragging #drop { display:flex; }
+  #toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:#111; color:#fff; padding:8px 16px; border-radius:6px; font-size:13px; opacity:0; transition:opacity .2s; pointer-events:none; }
+  #toast.show { opacity:1; }
+  /* rendered markdown */
+  #preview h1,#preview h2 { border-bottom:1px solid var(--border); padding-bottom:.3em; }
+  #preview h1 { font-size:2em; } #preview h2 { font-size:1.5em; }
+  #preview a { color:var(--accent); }
+  #preview code { background:var(--code-bg); padding:.15em .35em; border-radius:4px; font-size:.9em; }
+  #preview pre { background:var(--code-bg); padding:14px; border-radius:6px; overflow:auto; }
+  #preview pre code { background:none; padding:0; }
+  #preview blockquote { margin:0; padding:0 1em; color:var(--muted); border-left:4px solid var(--quote); }
+  #preview table { border-collapse:collapse; } #preview th,#preview td { border:1px solid var(--border); padding:6px 12px; }
+  #preview img { max-width:100%; }
+  #preview hr { border:0; border-top:1px solid var(--border); }
+  #divider { cursor:col-resize; position:relative; touch-action:none; }
+  #divider::after { content:''; position:absolute; top:0; bottom:0; left:5px; width:2px; background:var(--border); border-radius:2px; transition:background .15s; }
+  #divider:hover::after, #divider.drag::after { background:var(--accent); }
+  body.resizing { user-select:none; cursor:col-resize; }
+  @media (max-width:800px) { main { grid-template-columns:1fr; gap:12px; } #divider { display:none; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>RVD Markdown Viewer</h1>
+  <label class="btn">Upload .md<input id="file" type="file" accept=".md,.markdown,.txt,text/markdown,text/plain" hidden></label>
+  <button id="clear">Clear</button>
+  <div class="seg" id="modes">
+    <button data-m="edit">Edit</button><button data-m="split" class="on">Split</button><button data-m="view">View</button>
+  </div>
+  <div class="spacer"></div>
+  <button id="copyMd">Copy Markdown</button>
+  <button id="copyRich">Copy Formatted</button>
+  <button id="dlMd">Download .md</button>
+  <button id="dlHtml">Download .html</button>
+  <button id="gset" title="Set Google OAuth Client ID">⚙</button>
+  <button id="gdocs" class="primary">Export to Google Docs</button>
+</header>
+<main id="main" class="">
+  <section class="pane" id="editorPane">
+    <div class="label">Markdown — paste or type here, or drop a file</div>
+    <textarea id="src" spellcheck="false" placeholder="Paste Markdown here…"></textarea>
+    <div id="drop">Drop .md file to load</div>
+  </section>
+  <div id="divider" title="Drag to resize · double-click to reset"></div>
+  <section class="pane" id="previewPane">
+    <div class="label">Preview</div>
+    <div id="preview"></div>
+  </section>
+</main>
+<div id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const src = $('src'), preview = $('preview'), main = $('main');
+const SAMPLE = "# Hello 👋\n\nPaste or upload **Markdown** to see it rendered.\n\n- Copy as raw Markdown or formatted text\n- Export to Google Docs\n\n```js\nconsole.log('hi');\n```\n\n| A | B |\n|---|---|\n| 1 | 2 |\n";
+
+marked.setOptions({ gfm:true, breaks:false });
+const html = () => DOMPurify.sanitize(marked.parse(src.value));
+
+function render() {
+  preview.innerHTML = html();
+  try { localStorage.setItem('md-viewer', src.value); } catch {}
+}
+function toast(msg) {
+  const t = $('toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+// Rich copy: text/html (formatted) + text/plain (markdown fallback)
+async function copyRich() {
+  const h = html();
+  try {
+    await navigator.clipboard.write([new ClipboardItem({
+      'text/html': new Blob([h], { type:'text/html' }),
+      'text/plain': new Blob([src.value], { type:'text/plain' }),
+    })]);
+    return true;
+  } catch {
+    // Fallback: select rendered preview and use execCommand
+    const r = document.createRange(); r.selectNodeContents(preview);
+    const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+    const ok = document.execCommand('copy'); s.removeAllRanges();
+    return ok;
+  }
+}
+async function copyMd() {
+  try { await navigator.clipboard.writeText(src.value); }
+  catch { src.select(); document.execCommand('copy'); }
+}
+function download(name, text, type) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type }));
+  a.download = name; a.click(); URL.revokeObjectURL(a.href);
+}
+function loadFile(f) {
+  if (!f) return;
+  const rd = new FileReader();
+  rd.onload = () => { src.value = rd.result; render(); toast('Loaded ' + f.name); };
+  rd.readAsText(f);
+}
+
+src.addEventListener('input', render);
+$('file').addEventListener('change', e => { loadFile(e.target.files[0]); e.target.value = ''; });
+$('clear').onclick = () => { src.value = ''; render(); src.focus(); };
+$('copyMd').onclick = async () => { await copyMd(); toast('Markdown copied'); };
+$('copyRich').onclick = async () => toast(await copyRich() ? 'Formatted text copied' : 'Copy failed');
+$('dlMd').onclick = () => download('document.md', src.value, 'text/markdown');
+$('dlHtml').onclick = () => download('document.html',
+  '<!doctype html><meta charset="utf-8"><title>Document</title><body>' + html(), 'text/html');
+// Google Docs export: uploads HTML to Drive, which converts it to a native, formatted Google Doc.
+const getCid = () => { try { return localStorage.getItem('md-gclient') || ''; } catch { return ''; } };
+function token(cid) {
+  return new Promise((res, rej) => {
+    google.accounts.oauth2.initTokenClient({
+      client_id: cid, scope: 'https://www.googleapis.com/auth/drive.file',
+      callback: r => r.access_token ? res(r.access_token) : rej(new Error(r.error || 'auth failed')),
+      error_callback: e => rej(new Error(e.type || 'auth failed')),
+    }).requestAccessToken();
+  });
+}
+function docTitle() {
+  const m = src.value.match(/^#\s+(.+)$/m); return (m ? m[1] : 'Markdown document').slice(0, 100);
+}
+async function fallbackExport() {
+  const ok = await copyRich();
+  const d = document.createElement('div');
+  d.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:10';
+  d.innerHTML = `<div style="background:var(--panel);color:var(--text);padding:24px;border-radius:10px;max-width:420px;border:1px solid var(--border)">
+    <h3 style="margin-top:0">${ok ? '✅ Formatted content copied' : '⚠️ Copy failed'}</h3>
+    <p>${ok ? 'Click below to open a new Google Doc, then press <b>Cmd/Ctrl + V</b> to paste. Headings, lists, tables and links are kept.'
+            : 'Close this, click <b>Copy Formatted</b>, then open docs.new and paste.'}</p>
+    <p style="color:var(--muted);font-size:13px">The Doc opens blank until you paste. To have the app fill it automatically, set a Client ID with the ⚙ button.</p>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button id="mClose">Close</button>
+      <button id="mOpen" class="primary">Open Google Doc</button></div></div>`;
+  document.body.appendChild(d);
+  d.querySelector('#mClose').onclick = () => d.remove();
+  d.querySelector('#mOpen').onclick = () => { window.open('https://docs.new', '_blank'); d.remove(); };
+}
+$('gset').onclick = () => {
+  const v = prompt('Google OAuth Client ID (Web application type).\nLeave empty to remove.', getCid());
+  if (v === null) return;
+  try { localStorage.setItem('md-gclient', v.trim()); } catch {}
+  toast(v.trim() ? 'Client ID saved' : 'Client ID removed');
+};
+$('gdocs').onclick = async () => {
+  const cid = getCid();
+  if (!cid || typeof google === 'undefined' || location.protocol === 'file:') {
+    if (cid && location.protocol === 'file:') toast('Serve over http://localhost for API export — using copy fallback');
+    else if (!cid) toast('No Client ID set (⚙) — using copy & paste');
+    return fallbackExport();
+  }
+  try {
+    toast('Signing in to Google…');
+    const tk = await token(cid);
+    const body = '<!doctype html><html><head><meta charset="utf-8"><style>table{border-collapse:collapse}td,th{border:1px solid #999;padding:4px 8px}</style></head><body>' + html() + '</body></html>';
+    const b = 'xxBOUNDARYxx';
+    const multipart = `--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n` +
+      JSON.stringify({ name: docTitle(), mimeType: 'application/vnd.google-apps.document' }) +
+      `\r\n--${b}\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n${body}\r\n--${b}--`;
+    const r = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + tk, 'Content-Type': 'multipart/related; boundary=' + b },
+      body: multipart,
+    });
+    if (!r.ok) throw new Error('Drive ' + r.status);
+    const { id } = await r.json();
+    window.open('https://docs.google.com/document/d/' + id + '/edit', '_blank');
+    toast('Created Google Doc');
+  } catch (e) { toast('Export failed: ' + e.message); }
+};
+$('modes').onclick = e => {
+  const m = e.target.dataset.m; if (!m) return;
+  main.className = m === 'split' ? '' : m;
+  [...$('modes').children].forEach(b => b.classList.toggle('on', b === e.target));
+};
+
+// Drag & drop
+['dragenter','dragover'].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); document.body.classList.add('dragging'); }));
+['dragleave','drop'].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); if (ev === 'drop' || e.target === document.documentElement) document.body.classList.remove('dragging'); }));
+document.addEventListener('drop', e => loadFile(e.dataTransfer.files[0]));
+$('editorPane').addEventListener('dragenter', () => $('editorPane').classList.add('dragging'));
+document.addEventListener('drop', () => $('editorPane').classList.remove('dragging'));
+document.addEventListener('dragleave', e => { if (!e.relatedTarget) $('editorPane').classList.remove('dragging'); });
+
+// Draggable divider
+(() => {
+  const dv = $('divider');
+  const set = pct => main.style.setProperty('--split', pct + '%');
+  try { const v = localStorage.getItem('md-split'); if (v) set(v); } catch {}
+  dv.addEventListener('pointerdown', e => {
+    dv.setPointerCapture(e.pointerId); dv.classList.add('drag'); document.body.classList.add('resizing');
+  });
+  dv.addEventListener('pointermove', e => {
+    if (!dv.classList.contains('drag')) return;
+    const r = main.getBoundingClientRect();
+    set(Math.min(85, Math.max(15, (e.clientX - r.left) / r.width * 100)).toFixed(1));
+  });
+  const end = () => {
+    dv.classList.remove('drag'); document.body.classList.remove('resizing');
+    try { localStorage.setItem('md-split', parseFloat(main.style.getPropertyValue('--split')) || 50); } catch {}
+  };
+  dv.addEventListener('pointerup', end); dv.addEventListener('pointercancel', end);
+  dv.addEventListener('dblclick', () => { set(50); end(); });
+})();
+
+try { src.value = localStorage.getItem('md-viewer') || SAMPLE; } catch { src.value = SAMPLE; }
+render();
+</script>
+</body>
+</html>
